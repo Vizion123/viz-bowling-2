@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Viz Bowling</title>
+  <title>Viz Bowling (Assist Mode)</title>
   <style>
     :root { --bg:#0b1b34; --bg2:#193a60; --btn:#ffffff; --btnBorder:#cfd6e4;}
     html, body { height: 100%; margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: linear-gradient(180deg, var(--bg), var(--bg2)); color: #fff; }
@@ -49,30 +49,38 @@
   const hud = document.getElementById('hud');
   const msg = document.getElementById('msg');
 
-  // Lane interior x-bounds are [160, 640]; keep the ball radius inside that.
+  // Geometry
   const BALL_R = 16;
   const MIN_X = 160 + BALL_R; // 176
   const MAX_X = 640 - BALL_R; // 624
 
+  // Assist tuning (👈 tweak these to make it even easier/harder)
+  const HOOK_STRENGTH = 0.035;     // was ~0.015 — stronger hook
+  const FRICTION_X = 0.998;        // was 0.996 — keeps speed longer
+  const FRICTION_Y = 0.999;        // was 0.998 — keeps speed longer
+  const HIT_PAD = 6;               // extra pixels to count a "grazing" hit
+  const PIN_IMPULSE = 0.35;        // was 0.25 — pins fly more
+  const PIN_CHAIN_RADIUS = 34;     // neighbors within this get toppled push
+  const PIN_CHAIN_IMPULSE = 0.18;  // impulse to neighbors
+  const SOFT_AIM_ASSIST = 0.0009;  // subtle correction toward headpin early in lane
+
   // Game state
   let aim = 0;                 // -25..25 deg
   let power = 60;              // 30..100
-  let rolling = false;         // currently rolling down the lane?
-  let resolvedThisRoll = false;// one-shot guard to avoid double-scoring a roll
-  let frame = 1;               // 1..10 (current frame index)
-  let rollInFrame = 1;         // 1..3 depending on 10th frame
-  let startX = 400;            // current starting X of Viz
+  let rolling = false;
+  let resolvedThisRoll = false;
+  let frame = 1;               // 1..10
+  let rollInFrame = 1;
+  let startX = 400;
 
-  // Pins array + ball state
+  // Pins + ball
   let pins = makePins();
   let ball = makeBall();
 
-  // Traditional scoring data
-  // frames[i] = { r1, r2, r3 } pins per roll (10th may have r3)
+  // Traditional scoring
   let frames = Array.from({length: 10}, () => ({ r1: null, r2: null, r3: null }));
   let totalScore = 0;
 
-  // Helpers
   const clamp = (n,a,b) => Math.max(a, Math.min(b, n));
   const map = (n,a1,a2,b1,b2) => b1 + ((n-a1)*(b2-b1))/(a2-a1);
   const setMessage = t => { msg.textContent = t; };
@@ -84,13 +92,11 @@
   function frameString(fr, i){
     const r1 = fr.r1 ?? '-', r2 = fr.r2 ?? '-', r3 = fr.r3 ?? '-';
     if (i < 9) {
-      // frames 1-9: show X for strike, / for spare
       if (fr.r1 === 10) return `F${i+1}: X`;
       if (fr.r1 != null && fr.r2 != null) return `F${i+1}: ${fr.r1 + fr.r2 === 10 ? (fr.r1 + " /") : (fr.r1 + " " + fr.r2)}`;
       if (fr.r1 != null) return `F${i+1}: ${fr.r1}`;
       return `F${i+1}: -`;
     } else {
-      // frame 10 show raw rolls
       return `F10: ${r1} ${r2} ${fr.r3 != null ? r3 : ''}`.trim();
     }
   }
@@ -116,23 +122,20 @@
 
   function makeRoll(){
     if (rolling) return;
-    // In normal frames (1-9), if all pins are already knocked (strike last roll), block
     if (frame < 10 && pins.every(p=>p.knocked)) return;
-
-    const speed = map(power, 30, 100, 4.2, 8.2);
+    const speed = map(power, 30, 100, 4.2, 8.6); // tiny top-speed bump
     const angle = aim * Math.PI / 180;
     ball.vx = Math.sin(angle) * speed;
     ball.vy = -Math.cos(angle) * speed;
     ball.active = true;
     rolling = true;
-    resolvedThisRoll = false; // guard for this roll
+    resolvedThisRoll = false;
     setMessage('Rolling… press R to reset if stuck');
   }
 
-  // --- INPUT ---
+  // INPUT
   window.addEventListener('keydown', e => {
     if (e.repeat) return;
-
     if (e.key === 'ArrowLeft') {
       aim = clamp(aim - 3, -25, 25);
       startX = clamp(startX - 20, MIN_X, MAX_X);
@@ -147,13 +150,12 @@
     if (e.key === 'ArrowDown') power = clamp(power - 5, 30, 100);
 
     if (e.key === ' ') { makeRoll(); e.preventDefault(); }
-    if (e.key.toLowerCase() === 'r') { // reset current frame (practice)
+    if (e.key.toLowerCase() === 'r') {
       pins = makePins(); ball = makeBall(); rolling=false; resolvedThisRoll=false; rollInFrame = 1;
       setMessage('Frame reset. Aim and roll.');
     }
     if (e.key.toLowerCase() === 'n') { newGame(); }
     if (e.key === 'Enter') {
-      // Only advance if the current frame is finished (Frames 1-9: after r1 strike or r2; Frame 10: after r3 if granted or after 2 if not)
       if (!rolling && isFrameComplete(frame-1)) {
         if (frame < 10) { frame++; newFrame(); }
         else setMessage('Game Over — press N for a new game');
@@ -180,26 +182,52 @@
   };
   document.getElementById('new').onclick = () => { newGame(); };
 
-  // --- LOOP ---
+  // LOOP
   function loop(){
     if (ball.active){
       // integrate
       ball.x += ball.vx; ball.y += ball.vy;
 
-      // borders
-      if (ball.x < 160 + ball.r){ ball.x = 160 + ball.r; ball.vx *= -0.7; }
-      if (ball.x > 640 - ball.r){ ball.x = 640 - ball.r; ball.vx *= -0.7; }
-      // friction + tiny hook
-      ball.vx *= 0.996; ball.vy *= 0.998;
-      ball.vx += Math.sin(aim*Math.PI/180) * 0.015;
+      // soft aim assist toward headpin early in lane (y>350)
+      if (ball.y > 350 && ball.y < 520){
+        const head = { x: 400, y: 140 };
+        const dx = head.x - ball.x, dy = head.y - ball.y;
+        const d = Math.hypot(dx,dy) || 1;
+        ball.vx += (dx/d) * SOFT_AIM_ASSIST * ( (520 - ball.y) / 170 ); // fades out near foul line
+      }
 
-      // collisions
-      for (const p of pins){
+      // borders
+      if (ball.x < 160 + ball.r){ ball.x = 160 + ball.r; ball.vx *= -0.65; }
+      if (ball.x > 640 - ball.r){ ball.x = 640 - ball.r; ball.vx *= -0.65; }
+      // friction + stronger hook
+      ball.vx *= FRICTION_X; ball.vy *= FRICTION_Y;
+      ball.vx += Math.sin(aim*Math.PI/180) * HOOK_STRENGTH;
+
+      // collisions with pins (easier hit detection + stronger impulse + chain reaction)
+      for (let i=0; i<pins.length; i++){
+        const p = pins[i];
         if (p.knocked) continue;
         const dx = ball.x - p.x, dy = ball.y - p.y;
         const dist = Math.hypot(dx, dy);
-        if (dist < ball.r + p.r){
-          p.knocked = true; p.vx = dx*0.25; p.vy = dy*0.25;
+        if (dist < ball.r + p.r + HIT_PAD){
+          // topple this pin
+          p.knocked = true;
+          p.vx = dx * PIN_IMPULSE;
+          p.vy = dy * PIN_IMPULSE;
+
+          // chain reaction: nudge nearby pins
+          for (let j=0; j<pins.length; j++){
+            if (j === i) continue;
+            const q = pins[j];
+            if (q.knocked) continue;
+            const ndx = q.x - p.x, ndy = q.y - p.y;
+            const nd = Math.hypot(ndx, ndy);
+            if (nd < PIN_CHAIN_RADIUS){
+              q.knocked = true;
+              q.vx = ndx * PIN_CHAIN_IMPULSE;
+              q.vy = ndy * PIN_CHAIN_IMPULSE;
+            }
+          }
         }
       }
 
@@ -207,15 +235,13 @@
       if (ball.y < 90 && !resolvedThisRoll){
         resolvedThisRoll = true;
 
-        // count pins
         const knockedNow = pins.filter(p=>p.knocked).length;
         const standing = 10 - knockedNow;
 
-        // stop ball so we don't re-enter
         ball.active = false;
         rolling = false; ball.vx = 0; ball.vy = 0;
 
-        handleRoll(knockedNow, standing); // updates frames/rollInFrame/frame, may reset pins per 10th
+        handleRoll(knockedNow, standing);
         recomputeScore();
       }
     }
@@ -238,105 +264,78 @@
     requestAnimationFrame(loop);
   }
 
-  // --- ROLL/FRAME/SCORING LOGIC ---
-
+  // ROLL / FRAME / SCORING
   function handleRoll(knockedNow, standing){
-    const fi = frame - 1;                     // index 0..9
+    const fi = frame - 1;
     const fr = frames[fi];
 
     if (frame <= 9){ // Frames 1–9
       if (rollInFrame === 1){
         if (knockedNow === 10){
-          // Strike
           fr.r1 = 10;
           setMessage('STRIKE! (Press Enter for next frame)');
-          // advance frame
           if (frame < 10){ frame++; newFrame(); }
-          else rollInFrame = 1; // will be handled by 10th logic (not reached here)
         } else {
           fr.r1 = knockedNow;
           rollInFrame = 2;
           setMessage(`${knockedNow} pin${knockedNow===1?'':'s'} — Roll 2: adjust & SPACE`);
-          // keep remaining pins on deck (no reset)
           ball = makeBall();
         }
-      } else { // roll 2
-        // pins knocked on roll2 = total knocked - r1
+      } else {
         const r2 = Math.max(0, Math.min(10 - (fr.r1||0), knockedNow - (fr.r1||0)));
         fr.r2 = r2;
-
-        if ((fr.r1||0) + r2 === 10){
-          setMessage('SPARE! (Press Enter for next frame)');
-        } else {
-          setMessage(`${(fr.r1||0)+r2} pins this frame (Press Enter for next frame)`);
-        }
-        // advance frame
+        if ((fr.r1||0) + r2 === 10) setMessage('SPARE! (Press Enter for next frame)');
+        else setMessage(`${(fr.r1||0)+r2} pins this frame (Press Enter for next frame)`);
         if (frame < 10){ frame++; newFrame(); }
       }
     } else {
-      // Frame 10 special rules
+      // 10th frame
       if (rollInFrame === 1){
         fr.r1 = knockedNow;
         if (knockedNow === 10){
-          // strike: reset pins, allow two more rolls
           setMessage('10th: STRIKE! Two more balls.');
-          pins = makePins(); // reset
+          pins = makePins();
         } else {
           setMessage(`10th: ${knockedNow} — Roll 2`);
         }
         rollInFrame = 2;
         ball = makeBall();
       } else if (rollInFrame === 2){
-        // knock on roll2 depends on whether first was strike
         if (fr.r1 === 10){
-          // fresh set on roll2
-          fr.r2 = knockedNow; // can be 0..10
-          if (knockedNow === 10){
-            setMessage('10th: Another strike! Final bonus ball.');
-          } else {
-            setMessage(`10th: ${knockedNow} on ball 2 — Final bonus ball.`);
-          }
-          // reset pins for roll3 as well (10th bonus ball is on a fresh set)
+          fr.r2 = knockedNow; // 0..10
+          setMessage('10th: Ball 2 done — Final bonus ball.');
           pins = makePins();
           rollInFrame = 3;
         } else {
-          // first was not strike: roll2 is on remaining pins
           const r2 = Math.max(0, Math.min(10 - (fr.r1||0), knockedNow - (fr.r1||0)));
           fr.r2 = r2;
-
           if ((fr.r1||0) + r2 === 10){
-            // spare -> allow one bonus ball on fresh set
             setMessage('10th: SPARE! One bonus ball.');
             pins = makePins();
             rollInFrame = 3;
           } else {
-            // open frame -> game over
             setMessage('10th: Frame complete. Game Over — press N for a new game');
-            rollInFrame = 3; // mark complete (no third ball)
+            rollInFrame = 3; // complete (no bonus)
           }
         }
         ball = makeBall();
       } else {
-        // roll 3 (only if strike/spare earned it)
-        // Always a fresh set in our simplified 10th-frame handling
-        fr.r3 = knockedNow; // 0..10 possible
+        fr.r3 = knockedNow;
         setMessage('10th: Game Over — press N for a new game');
-        // No more frames; wait for Enter/N as desired (Enter does nothing here)
       }
     }
   }
 
   function recomputeScore(){
-    // compute total using standard rules: strike = 10 + next two rolls; spare = 10 + next roll
     totalScore = 0;
     for (let i = 0; i < 10; i++){
       const fr = frames[i];
       if (i < 9) {
         const r1 = fr.r1 ?? null, r2 = fr.r2 ?? null;
-        if (r1 == null) break; // frame not started
+        if (r1 == null) break;
         if (r1 === 10) {
           const bonus = sumNextRolls(i, 2);
-          if (bonus == null) break; // not enough info yet
+          if (bonus == null) break;
           totalScore += 10 + bonus;
         } else if (r2 != null) {
           if (r1 + r2 === 10) {
@@ -346,20 +345,14 @@
           } else {
             totalScore += r1 + r2;
           }
-        } else {
-          // waiting for second roll
-          break;
-        }
+        } else break;
       } else {
-        // 10th frame: sum of available rolls
         const r1 = fr.r1 ?? 0, r2 = fr.r2 ?? 0, r3 = fr.r3 ?? 0;
         totalScore += r1 + r2 + r3;
       }
     }
   }
 
-  // Return sum of the next N rolls after frame i (look ahead into future frames).
-  // If not enough rolls yet, return null.
   function sumNextRolls(i, n){
     const rolls = [];
     for (let f = i+1; f < 10; f++){
@@ -368,7 +361,7 @@
       if (rolls.length >= n) break;
       if (fr.r2 != null) rolls.push(fr.r2);
       if (rolls.length >= n) break;
-      if (f === 9 && fr.r3 != null) rolls.push(fr.r3); // 10th bonus ball
+      if (f === 9 && fr.r3 != null) rolls.push(fr.r3);
       if (rolls.length >= n) break;
     }
     if (rolls.length < n) return null;
@@ -377,20 +370,15 @@
 
   function isFrameComplete(idx){
     const fr = frames[idx];
-    if (idx < 9) {
-      // strike or two rolls filled
-      return (fr.r1 === 10) || (fr.r1 != null && fr.r2 != null);
-    } else {
-      // 10th: if r1 is strike or r1+r2 is spare => need r3 to finish; else done after r2
-      if (fr.r1 == null) return false;
-      if (fr.r1 === 10) return fr.r2 != null && fr.r3 != null;
-      if (fr.r2 == null) return false;
-      if (fr.r1 + fr.r2 === 10) return fr.r3 != null;
-      return true; // open frame done after two rolls
-    }
+    if (idx < 9) return (fr.r1 === 10) || (fr.r1 != null && fr.r2 != null);
+    if (fr.r1 == null) return false;
+    if (fr.r1 === 10) return fr.r2 != null && fr.r3 != null;
+    if (fr.r2 == null) return false;
+    if (fr.r1 + fr.r2 === 10) return fr.r3 != null;
+    return true;
   }
 
-  // --- DRAWING ---
+  // DRAWING
   function drawBackground(ctx){
     const g = ctx.createLinearGradient(0,0,0,canvas.height);
     g.addColorStop(0, '#0b1b34'); g.addColorStop(1, '#193a60');
@@ -398,28 +386,23 @@
   }
 
   function drawLane(ctx){
-    // gutters
     ctx.fillStyle = '#0a1020';
     ctx.fillRect(120,80,40,440);
     ctx.fillRect(640,80,40,440);
 
-    // wood lane
     const laneGrad = ctx.createLinearGradient(160,520,640,80);
     laneGrad.addColorStop(0,'#d9a86c'); laneGrad.addColorStop(1,'#c58b49');
     ctx.fillStyle = laneGrad;
     ctx.fillRect(160,80,480,440);
 
-    // approach
     ctx.fillStyle = '#8b5e34';
     ctx.fillRect(160,520,480,24);
 
-    // center line
     ctx.strokeStyle = 'rgba(0,0,0,0.15)';
     ctx.setLineDash([8,12]);
     ctx.beginPath(); ctx.moveTo(400,520); ctx.lineTo(400,92); ctx.stroke();
     ctx.setLineDash([]);
 
-    // festive lights
     ctx.save(); ctx.translate(160,72);
     for (let i=0;i<16;i++){ const x=(i/15)*480;
       ctx.fillStyle = ['#ffd166','#ef476f','#06d6a0','#118ab2'][i%4];
@@ -432,16 +415,12 @@
     for (const p of ps){
       ctx.save(); ctx.translate(p.x, p.y);
       if (p.knocked) ctx.rotate((p.vx+p.vy)*0.08);
-      // body
       roundRect(ctx,-10,-24,20,44,10);
       ctx.fillStyle = '#fff2e0'; ctx.fill();
-      // hat
       ctx.fillStyle = '#d1495b'; ctx.beginPath(); ctx.moveTo(0,-32); ctx.lineTo(12,-16); ctx.lineTo(-12,-16); ctx.closePath(); ctx.fill();
       ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0,-32,3,0,Math.PI*2); ctx.fill();
-      // face
       ctx.fillStyle = '#42312a'; ctx.beginPath(); ctx.arc(-4,-8,1.5,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(4,-8,1.5,0,Math.PI*2); ctx.fill();
       ctx.strokeStyle = '#42312a'; ctx.beginPath(); ctx.arc(0,-2,5,0,Math.PI,false); ctx.stroke();
-      // belt
       ctx.fillStyle = '#2a9d8f'; ctx.fillRect(-10,2,20,6);
       ctx.fillStyle = '#f4a261'; ctx.fillRect(-3,3,6,4);
       ctx.restore();
@@ -450,22 +429,17 @@
 
   function drawBall(ctx, b){
     ctx.save(); ctx.translate(b.x, b.y);
-    // shadow
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.beginPath(); ctx.ellipse(0, b.r*0.6, b.r*1.1, b.r*0.4, 0, 0, Math.PI*2); ctx.fill();
-    // body (Viz)
     const g = ctx.createRadialGradient(-6,-6,2, 0,0,b.r);
     g.addColorStop(0,'#ffffff'); g.addColorStop(1,'#e6ecf6');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
-    // iris/pupil/highlight
     ctx.fillStyle = '#2b4a73'; ctx.beginPath(); ctx.arc(0,0,b.r*0.55,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = '#7fb3e4'; ctx.beginPath(); ctx.arc(0,0,b.r*0.35,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = '#0b1730'; ctx.beginPath(); ctx.arc(4,-2,b.r*0.22,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(8,-6,b.r*0.09,0,Math.PI*2); ctx.fill();
-    // beanie
     roundRect(ctx,-18,-24,36,12,6); ctx.fillStyle = '#365b2c'; ctx.fill();
     ctx.fillStyle = '#4a7a3a'; ctx.beginPath(); ctx.arc(18,-18,5,0,Math.PI*2); ctx.fill();
-    // smile
     ctx.strokeStyle = '#c33'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(-2,6,10,0,Math.PI*0.7,false); ctx.stroke();
     ctx.restore();
   }
@@ -495,6 +469,180 @@
       }
     }
     return ps;
+  }
+
+  // scoring helpers
+  function recomputeScore(){
+    totalScore = 0;
+    for (let i = 0; i < 10; i++){
+      const fr = frames[i];
+      if (i < 9) {
+        const r1 = fr.r1 ?? null, r2 = fr.r2 ?? null;
+        if (r1 == null) break;
+        if (r1 === 10) {
+          const bonus = sumNextRolls(i, 2);
+          if (bonus == null) break;
+          totalScore += 10 + bonus;
+        } else if (r2 != null) {
+          if (r1 + r2 === 10) {
+            const bonus = sumNextRolls(i, 1);
+            if (bonus == null) break;
+            totalScore += 10 + bonus;
+          } else {
+            totalScore += r1 + r2;
+          }
+        } else break;
+      } else {
+        const r1 = fr.r1 ?? 0, r2 = fr.r2 ?? 0, r3 = fr.r3 ?? 0;
+        totalScore += r1 + r2 + r3;
+      }
+    }
+  }
+
+  function sumNextRolls(i, n){
+    const rolls = [];
+    for (let f = i+1; f < 10; f++){
+      const fr = frames[f];
+      if (fr.r1 != null) rolls.push(fr.r1);
+      if (rolls.length >= n) break;
+      if (fr.r2 != null) rolls.push(fr.r2);
+      if (rolls.length >= n) break;
+      if (f === 9 && fr.r3 != null) rolls.push(fr.r3);
+      if (rolls.length >= n) break;
+    }
+    if (rolls.length < n) return null;
+    return rolls.slice(0, n).reduce((a,b)=>a+b,0);
+  }
+
+  function isFrameComplete(idx){
+    const fr = frames[idx];
+    if (idx < 9) return (fr.r1 === 10) || (fr.r1 != null && fr.r2 != null);
+    if (fr.r1 == null) return false;
+    if (fr.r1 === 10) return fr.r2 != null && fr.r3 != null;
+    if (fr.r2 == null) return false;
+    if (fr.r1 + fr.r2 === 10) return fr.r3 != null;
+    return true;
+  }
+
+  function handleRoll(knockedNow, standing){
+    const fi = frame - 1;
+    const fr = frames[fi];
+
+    if (frame <= 9){
+      if (rollInFrame === 1){
+        if (knockedNow === 10){
+          fr.r1 = 10; setMessage('STRIKE! (Press Enter for next frame)');
+          if (frame < 10){ frame++; newFrame(); }
+        } else {
+          fr.r1 = knockedNow; rollInFrame = 2;
+          setMessage(`${knockedNow} pin${knockedNow===1?'':'s'} — Roll 2: adjust & SPACE`);
+          ball = makeBall();
+        }
+      } else {
+        const r2 = Math.max(0, Math.min(10 - (fr.r1||0), knockedNow - (fr.r1||0)));
+        fr.r2 = r2;
+        if ((fr.r1||0) + r2 === 10) setMessage('SPARE! (Press Enter for next frame)');
+        else setMessage(`${(fr.r1||0)+r2} pins this frame (Press Enter for next frame)`);
+        if (frame < 10){ frame++; newFrame(); }
+      }
+    } else {
+      if (rollInFrame === 1){
+        fr.r1 = knockedNow;
+        if (knockedNow === 10){ setMessage('10th: STRIKE! Two more balls.'); pins = makePins(); }
+        else setMessage(`10th: ${knockedNow} — Roll 2`);
+        rollInFrame = 2; ball = makeBall();
+      } else if (rollInFrame === 2){
+        if (fr.r1 === 10){
+          fr.r2 = knockedNow;
+          setMessage('10th: Ball 2 done — Final bonus ball.');
+          pins = makePins(); rollInFrame = 3;
+        } else {
+          const r2 = Math.max(0, Math.min(10 - (fr.r1||0), knockedNow - (fr.r1||0)));
+          fr.r2 = r2;
+          if ((fr.r1||0) + r2 === 10){ setMessage('10th: SPARE! One bonus ball.'); pins = makePins(); rollInFrame = 3; }
+          else { setMessage('10th: Frame complete. Game Over — press N for a new game'); rollInFrame = 3; }
+        }
+        ball = makeBall();
+      } else {
+        fr.r3 = knockedNow; setMessage('10th: Game Over — press N for a new game');
+      }
+    }
+  }
+
+  // DRAWING
+  function drawBackground(ctx){
+    const g = ctx.createLinearGradient(0,0,0,canvas.height);
+    g.addColorStop(0, '#0b1b34'); g.addColorStop(1, '#193a60');
+    ctx.fillStyle = g; ctx.fillRect(0,0,canvas.width,canvas.height);
+  }
+
+  function drawLane(ctx){
+    ctx.fillStyle = '#0a1020';
+    ctx.fillRect(120,80,40,440);
+    ctx.fillRect(640,80,40,440);
+
+    const laneGrad = ctx.createLinearGradient(160,520,640,80);
+    laneGrad.addColorStop(0,'#d9a86c'); laneGrad.addColorStop(1,'#c58b49');
+    ctx.fillStyle = laneGrad; ctx.fillRect(160,80,480,440);
+
+    ctx.fillStyle = '#8b5e34'; ctx.fillRect(160,520,480,24);
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)'; ctx.setLineDash([8,12]);
+    ctx.beginPath(); ctx.moveTo(400,520); ctx.lineTo(400,92); ctx.stroke(); ctx.setLineDash([]);
+
+    ctx.save(); ctx.translate(160,72);
+    for (let i=0;i<16;i++){ const x=(i/15)*480;
+      ctx.fillStyle = ['#ffd166','#ef476f','#06d6a0','#118ab2'][i%4];
+      ctx.beginPath(); ctx.arc(x,0,4,0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawPins(ctx, ps){
+    for (const p of ps){
+      ctx.save(); ctx.translate(p.x, p.y);
+      if (p.knocked) ctx.rotate((p.vx+p.vy)*0.08);
+      roundRect(ctx,-10,-24,20,44,10); ctx.fillStyle = '#fff2e0'; ctx.fill();
+      ctx.fillStyle = '#d1495b'; ctx.beginPath(); ctx.moveTo(0,-32); ctx.lineTo(12,-16); ctx.lineTo(-12,-16); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0,-32,3,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#42312a'; ctx.beginPath(); ctx.arc(-4,-8,1.5,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(4,-8,1.5,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#42312a'; ctx.beginPath(); ctx.arc(0,-2,5,0,Math.PI,false); ctx.stroke();
+      ctx.fillStyle = '#2a9d8f'; ctx.fillRect(-10,2,20,6);
+      ctx.fillStyle = '#f4a261'; ctx.fillRect(-3,3,6,4);
+      ctx.restore();
+    }
+  }
+
+  function drawBall(ctx, b){
+    ctx.save(); ctx.translate(b.x, b.y);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(0, b.r*0.6, b.r*1.1, b.r*0.4, 0, 0, Math.PI*2); ctx.fill();
+    const g = ctx.createRadialGradient(-6,-6,2, 0,0,b.r);
+    g.addColorStop(0,'#ffffff'); g.addColorStop(1,'#e6ecf6');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#2b4a73'; ctx.beginPath(); ctx.arc(0,0,b.r*0.55,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#7fb3e4'; ctx.beginPath(); ctx.arc(0,0,b.r*0.35,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#0b1730'; ctx.beginPath(); ctx.arc(4,-2,b.r*0.22,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(8,-6,b.r*0.09,0,Math.PI*2); ctx.fill();
+    roundRect(ctx,-18,-24,36,12,6); ctx.fillStyle = '#365b2c'; ctx.fill();
+    ctx.fillStyle = '#4a7a3a'; ctx.beginPath(); ctx.arc(18,-18,5,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#c33'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(-2,6,10,0,Math.PI*0.7,false); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawHUD(ctx){
+    ctx.save(); ctx.fillStyle = '#ffffff'; ctx.font = '14px Inter, system-ui, sans-serif';
+    ctx.fillText('Aim: ' + (aim|0) + '°', 10, 20);
+    ctx.fillText('Power: ' + power + '%', 10, 40);
+    ctx.fillText('Score: ' + totalScore, 10, 60);
+    ctx.fillText('Frame ' + frame + ' / 10  •  Roll ' + rollInFrame, 10, 80);
+    ctx.restore();
+  }
+
+  function roundRect(ctx, x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
   }
 
   // start
