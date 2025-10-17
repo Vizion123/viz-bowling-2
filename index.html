@@ -37,7 +37,7 @@
       <button id="new">New Game</button>
     </div>
     <div class="footer">
-      Controls: <span class="pill">← → aim & slide start</span> <span class="pill">↑ ↓ power</span> <span class="pill">Space roll</span> <span class="pill">R reset</span> <span class="pill">Enter next frame</span> <span class="pill">N new game</span>
+      Controls: <span class="pill">← → aim & move start</span> <span class="pill">↑ ↓ power</span> <span class="pill">Space roll</span> <span class="pill">R reset</span> <span class="pill">Enter next frame</span> <span class="pill">N new game</span>
     </div>
   </div>
 </div>
@@ -50,15 +50,19 @@
   const msg = document.getElementById('msg');
   const W = canvas.width, H = canvas.height;
 
+  // Lane interior x-bounds are [160, 640]; keep the ball radius inside that.
+  const BALL_R = 16;
+  const MIN_X = 160 + BALL_R; // 176
+  const MAX_X = 640 - BALL_R; // 624
+
   // State
   let aim = 0;               // -25..25 deg
   let power = 60;            // 30..100
   let rolling = false;
   let frame = 1, rollInFrame = 1, score = 0;
 
-  // Starting position with smooth slide
+  // Starting position (immediate movement with arrows/buttons)
   let startX = 400;          // current starting X of Viz
-  let targetStartX = 400;    // where Viz should slide toward
 
   let pins = makePins();
   let ball = makeBall();
@@ -70,16 +74,16 @@
   function setMessage(t){ msg.textContent = t; }
   function updateHUD(){ hud.textContent = `Frame ${frame} • Roll ${rollInFrame} • Score ${score} • Aim ${aim|0}° • Power ${power}%`; }
 
-  function makeBall(){ return { x: startX, y: 520, vx:0, vy:0, r:16, active:false }; }
+  function makeBall(){ return { x: startX, y: 520, vx:0, vy:0, r:BALL_R, active:false }; }
 
   function newFrame(resetAll=false){
     if (resetAll){ frame = 1; score = 0; }
     rollInFrame = 1;
     pins = makePins();
-    // keep your chosen startX
+    // keep chosen startX when starting new frame
     ball = makeBall();
     rolling = false;
-    setMessage('Aim with ← → (slides Viz), set power with ↑ ↓, SPACE to roll');
+    setMessage('Aim with ← → (moves Viz), set power with ↑ ↓, SPACE to roll');
   }
 
   function makeRoll(){
@@ -100,12 +104,14 @@
 
     if (e.key === 'ArrowLeft') {
       aim = clamp(aim - 3, -25, 25);
-      targetStartX = clamp((targetStartX || startX) - 24, 200, 600);
+      startX = clamp(startX - 20, MIN_X, MAX_X); // move Viz left
+      if (!ball.active) ball.x = startX;         // update visible ball position when idle
     }
 
     if (e.key === 'ArrowRight') {
       aim = clamp(aim + 3, -25, 25);
-      targetStartX = clamp((targetStartX || startX) + 24, 200, 600);
+      startX = clamp(startX + 20, MIN_X, MAX_X); // move Viz right
+      if (!ball.active) ball.x = startX;
     }
 
     if (e.key === 'ArrowUp')   power = clamp(power + 5, 30, 100);
@@ -120,11 +126,13 @@
   // Input (buttons)
   document.getElementById('aimL').onclick = () => {
     aim = clamp(aim - 3, -25, 25);
-    targetStartX = clamp((targetStartX || startX) - 24, 200, 600);
+    startX = clamp(startX - 20, MIN_X, MAX_X);
+    if (!ball.active) ball.x = startX;
   };
   document.getElementById('aimR').onclick = () => {
     aim = clamp(aim + 3, -25, 25);
-    targetStartX = clamp((targetStartX || startX) + 24, 200, 600);
+    startX = clamp(startX + 20, MIN_X, MAX_X);
+    if (!ball.active) ball.x = startX;
   };
   document.getElementById('powM').onclick = () => { power = clamp(power - 5, 30, 100); };
   document.getElementById('powP').onclick = () => { power = clamp(power + 5, 30, 100); };
@@ -134,21 +142,6 @@
 
   // Main loop
   function loop(){
-    // Smooth slide of starting position when idle
-    if (!ball.active) {
-      const ease = 0.18; // 0.1–0.25 = slow–snappy
-      const dx = (typeof targetStartX === 'number' ? targetStartX : startX) - ball.x;
-      if (Math.abs(dx) > 0.1) {
-        ball.x += dx * ease;
-        startX = ball.x;
-      } else {
-        ball.x = (typeof targetStartX === 'number' ? targetStartX : startX);
-        startX = ball.x;
-      }
-      startX = clamp(startX, 200, 600);
-      ball.x = clamp(ball.x, 200, 600);
-    }
-
     // Physics when rolling
     if (ball.active){
       ball.x += ball.vx; ball.y += ball.vy;
@@ -184,13 +177,13 @@
           } else {
             // Prepare second roll
             rollInFrame = 2;
-            message += ' Roll 2: aim/slide & SPACE to roll again';
-            ball = makeBall();
+            message += ' Roll 2: move/aim & SPACE to roll again';
+            ball = makeBall();     // respawn at current startX
             rolling = false;       // allow Space to trigger
             ball.active = false;   // ensure idle state
           }
         } else {
-          // second roll scoring (simple: add pins knocked this frame total)
+          // second roll (simple scoring: add total pins knocked this frame)
           score += knockedNow;
           advanceFrame = true;
         }
