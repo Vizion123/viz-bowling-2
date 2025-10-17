@@ -48,7 +48,6 @@
   const ctx = canvas.getContext('2d');
   const hud = document.getElementById('hud');
   const msg = document.getElementById('msg');
-  const W = canvas.width, H = canvas.height;
 
   // Lane interior x-bounds are [160, 640]; keep the ball radius inside that.
   const BALL_R = 16;
@@ -58,10 +57,11 @@
   // Game state
   let aim = 0;               // -25..25 deg
   let power = 60;            // 30..100
-  let rolling = false;
+  let rolling = false;       // currently rolling down the lane?
+  let resolvedThisRoll = false; // <- one-shot guard to avoid double-scoring a roll
   let frame = 1, rollInFrame = 1, score = 0;
 
-  // Track pins knocked on first roll to score only the NEW pins on roll 2
+  // Track pins knocked on first roll to score only NEW pins on roll 2
   let firstRollKnocked = 0;
 
   // Starting position (immediate movement with arrows/buttons)
@@ -70,12 +70,14 @@
   let pins = makePins();
   let ball = makeBall();
 
-  // Utils
   const clamp = (n,a,b) => Math.max(a, Math.min(b, n));
   const map = (n,a1,a2,b1,b2) => b1 + ((n-a1)*(b2-b1))/(a2-a1);
 
   function setMessage(t){ msg.textContent = t; }
-  function updateHUD(){ hud.textContent = `Frame ${frame} • Roll ${rollInFrame} • Score ${score} • Aim ${aim|0}° • Power ${power}%`; }
+  function updateHUD(){
+    document.getElementById('hud').textContent =
+      `Frame ${frame} • Roll ${rollInFrame} • Score ${score} • Aim ${aim|0}° • Power ${power}%`;
+  }
 
   function makeBall(){ return { x: startX, y: 520, vx:0, vy:0, r:BALL_R, active:false }; }
 
@@ -83,15 +85,14 @@
     if (resetAll){ frame = 1; score = 0; }
     rollInFrame = 1;
     firstRollKnocked = 0;
+    resolvedThisRoll = false;
     pins = makePins();
-    // keep chosen startX when starting new frame
     ball = makeBall();
     rolling = false;
     setMessage('Aim with ← → (moves Viz), set power with ↑ ↓, SPACE to roll');
   }
 
   function makeRoll(){
-    // Block if still rolling or strike already cleared all pins
     if (rolling || pins.every(p=>p.knocked)) return;
     const speed = map(power, 30, 100, 4.2, 8.2);
     const angle = aim * Math.PI / 180;
@@ -99,6 +100,7 @@
     ball.vy = -Math.cos(angle) * speed;
     ball.active = true;
     rolling = true;
+    resolvedThisRoll = false;    // <- new roll starts unresolved
     setMessage('Rolling… press R to reset if stuck');
   }
 
@@ -108,16 +110,14 @@
 
     if (e.key === 'ArrowLeft') {
       aim = clamp(aim - 3, -25, 25);
-      startX = clamp(startX - 20, MIN_X, MAX_X); // move Viz left
-      if (!ball.active) ball.x = startX;         // update visible ball position when idle
-    }
-
-    if (e.key === 'ArrowRight') {
-      aim = clamp(aim + 3, -25, 25);
-      startX = clamp(startX + 20, MIN_X, MAX_X); // move Viz right
+      startX = clamp(startX - 20, MIN_X, MAX_X);
       if (!ball.active) ball.x = startX;
     }
-
+    if (e.key === 'ArrowRight') {
+      aim = clamp(aim + 3, -25, 25);
+      startX = clamp(startX + 20, MIN_X, MAX_X);
+      if (!ball.active) ball.x = startX;
+    }
     if (e.key === 'ArrowUp')   power = clamp(power + 5, 30, 100);
     if (e.key === 'ArrowDown') power = clamp(power - 5, 30, 100);
 
@@ -144,7 +144,6 @@
   document.getElementById('reset').onclick = () => { newFrame(); };
   document.getElementById('new').onclick = () => { newFrame(true); };
 
-  // Main loop
   function loop(){
     // Physics when rolling
     if (ball.active){
@@ -168,18 +167,19 @@
         }
       }
 
-      // reached the end of lane — resolve ONCE, then deactivate ball so it can't rescore
-      if (ball.y < 90){
+      // reached the end of lane — resolve ONCE using guard
+      if (ball.y < 90 && !resolvedThisRoll){
+        resolvedThisRoll = true;     // <- guard flips immediately
+
         const knockedNow = pins.filter(p=>p.knocked).length;
         const standing = 10 - knockedNow;
+        let message = `${knockedNow} pin${knockedNow===1?'':'s'}!`;
+        let advanceFrame = false;
 
-        // Deactivate immediately to prevent repeated scoring on subsequent frames
+        // Stop motion so we don't re-enter resolution
         ball.active = false;
         rolling = false;
         ball.vx = 0; ball.vy = 0;
-
-        let message = `${knockedNow} pin${knockedNow===1?'':'s'}!`;
-        let advanceFrame = false;
 
         if (rollInFrame === 1){
           if (standing === 0){
@@ -190,13 +190,13 @@
           } else {
             // Prepare second roll
             rollInFrame = 2;
-            firstRollKnocked = knockedNow;  // remember how many fell on roll 1
+            firstRollKnocked = knockedNow;     // remember roll-1 knocked count
             message += ' Roll 2: move/aim & SPACE to roll again';
-            ball = makeBall();              // respawn at current startX (idle)
-            // ball.active already false
+            ball = makeBall();                 // respawn idle at current startX
+            // Note: resolvedThisRoll stays true until next makeRoll()
           }
         } else {
-          // Second roll — add ONLY the new pins knocked on roll 2
+          // Second roll — add ONLY new pins from roll 2
           const pinsSecond = Math.max(0, knockedNow - firstRollKnocked);
           score += pinsSecond;
           firstRollKnocked = 0;
@@ -222,7 +222,7 @@
     }
 
     // Draw
-    ctx.clearRect(0,0,W,H);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
     drawBackground(ctx);
     drawLane(ctx);
     drawPins(ctx, pins);
@@ -235,9 +235,9 @@
 
   // Drawing
   function drawBackground(ctx){
-    const g = ctx.createLinearGradient(0,0,0,H);
+    const g = ctx.createLinearGradient(0,0,0,canvas.height);
     g.addColorStop(0, '#0b1b34'); g.addColorStop(1, '#193a60');
-    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = g; ctx.fillRect(0,0,canvas.width,canvas.height);
   }
 
   function drawLane(ctx){
@@ -329,11 +329,11 @@
   }
 
   function makePins(){
-    const ps = []; const startX = 400, startY = 140, spacing = 34;
+    const ps = []; const sx = 400, sy = 140, spacing = 34;
     for (let row=0; row<4; row++){
       for (let i=0; i<=row; i++){
-        const x = startX - row*(spacing/2) + i*spacing;
-        const y = startY + row*spacing;
+        const x = sx - row*(spacing/2) + i*spacing;
+        const y = sy + row*spacing;
         ps.push({ x, y, r:12, knocked:false, vx:0, vy:0 });
       }
     }
