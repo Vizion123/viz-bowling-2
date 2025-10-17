@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Viz Bowling</title>
   <style>
-    :root { --bg:#0b1b34; --bg2:#193a60; --panel:#ffffff; --btn:#ffffff; --btnBorder:#cfd6e4;}
+    :root { --bg:#0b1b34; --bg2:#193a60; --btn:#ffffff; --btnBorder:#cfd6e4;}
     html, body { height: 100%; margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: linear-gradient(180deg, var(--bg), var(--bg2)); color: #fff; }
     .wrap { display: flex; align-items: center; justify-content: center; padding: 20px; }
     .panel { width: min(920px, 96vw); text-align: center; }
@@ -37,7 +37,7 @@
       <button id="new">New Game</button>
     </div>
     <div class="footer">
-      Controls: <span class="pill">← → aim</span> <span class="pill">↑ ↓ power</span> <span class="pill">Space roll</span> <span class="pill">R reset</span> <span class="pill">Enter next frame</span> <span class="pill">N new game</span>
+      Controls: <span class="pill">← → aim & slide start</span> <span class="pill">↑ ↓ power</span> <span class="pill">Space roll</span> <span class="pill">R reset</span> <span class="pill">Enter next frame</span> <span class="pill">N new game</span>
     </div>
   </div>
 </div>
@@ -50,74 +50,118 @@
   const msg = document.getElementById('msg');
   const W = canvas.width, H = canvas.height;
 
-  let aim = 0;            // -25..25 deg
-  let power = 60;         // 30..100
+  // State
+  let aim = 0;               // -25..25 deg
+  let power = 60;            // 30..100
   let rolling = false;
   let frame = 1, rollInFrame = 1, score = 0;
+
+  // Starting position with smooth slide
+  let startX = 400;          // current starting X of Viz
+  let targetStartX = 400;    // where Viz should slide toward
+
   let pins = makePins();
   let ball = makeBall();
-  let raf;
 
-  function makeBall(){
-    return { x: 400, y: 520, vx:0, vy:0, r:16, active:false };
-  }
-
-  function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
-  function map(n,a1,a2,b1,b2){ return b1 + ((n-a1)*(b2-b1))/(a2-a1); }
+  // Utils
+  const clamp = (n,a,b) => Math.max(a, Math.min(b, n));
+  const map = (n,a1,a2,b1,b2) => b1 + ((n-a1)*(b2-b1))/(a2-a1);
 
   function setMessage(t){ msg.textContent = t; }
   function updateHUD(){ hud.textContent = `Frame ${frame} • Roll ${rollInFrame} • Score ${score} • Aim ${aim|0}° • Power ${power}%`; }
+
+  function makeBall(){ return { x: startX, y: 520, vx:0, vy:0, r:16, active:false }; }
 
   function newFrame(resetAll=false){
     if (resetAll){ frame = 1; score = 0; }
     rollInFrame = 1;
     pins = makePins();
+    // keep your chosen startX
     ball = makeBall();
     rolling = false;
-    setMessage('Aim with ← →, set power with ↑ ↓, SPACE to roll');
+    setMessage('Aim with ← → (slides Viz), set power with ↑ ↓, SPACE to roll');
   }
 
   function makeRoll(){
+    // Block if still rolling or strike already cleared all pins
     if (rolling || pins.every(p=>p.knocked)) return;
     const speed = map(power, 30, 100, 4.2, 8.2);
     const angle = aim * Math.PI / 180;
     ball.vx = Math.sin(angle) * speed;
     ball.vy = -Math.cos(angle) * speed;
-    ball.active = true; rolling = true;
+    ball.active = true;
+    rolling = true;
     setMessage('Rolling… press R to reset if stuck');
   }
 
-  // input
+  // Input (keyboard)
   window.addEventListener('keydown', e => {
     if (e.repeat) return;
-    if (e.key === 'ArrowLeft') aim = clamp(aim-3, -25, 25);
-    if (e.key === 'ArrowRight') aim = clamp(aim+3, -25, 25);
-    if (e.key === 'ArrowUp') power = clamp(power+5, 30, 100);
-    if (e.key === 'ArrowDown') power = clamp(power-5, 30, 100);
+
+    if (e.key === 'ArrowLeft') {
+      aim = clamp(aim - 3, -25, 25);
+      targetStartX = clamp((targetStartX || startX) - 24, 200, 600);
+    }
+
+    if (e.key === 'ArrowRight') {
+      aim = clamp(aim + 3, -25, 25);
+      targetStartX = clamp((targetStartX || startX) + 24, 200, 600);
+    }
+
+    if (e.key === 'ArrowUp')   power = clamp(power + 5, 30, 100);
+    if (e.key === 'ArrowDown') power = clamp(power - 5, 30, 100);
+
     if (e.key === ' '){ makeRoll(); e.preventDefault(); }
     if (e.key.toLowerCase() === 'r'){ newFrame(); }
     if (e.key === 'Enter'){ if (!rolling && !ball.active){ frame++; newFrame(); } }
     if (e.key.toLowerCase() === 'n'){ newFrame(true); }
   });
 
-  document.getElementById('aimL').onclick = () => { aim = clamp(aim-3, -25, 25); };
-  document.getElementById('aimR').onclick = () => { aim = clamp(aim+3, -25, 25); };
-  document.getElementById('powM').onclick = () => { power = clamp(power-5, 30, 100); };
-  document.getElementById('powP').onclick = () => { power = clamp(power+5, 30, 100); };
+  // Input (buttons)
+  document.getElementById('aimL').onclick = () => {
+    aim = clamp(aim - 3, -25, 25);
+    targetStartX = clamp((targetStartX || startX) - 24, 200, 600);
+  };
+  document.getElementById('aimR').onclick = () => {
+    aim = clamp(aim + 3, -25, 25);
+    targetStartX = clamp((targetStartX || startX) + 24, 200, 600);
+  };
+  document.getElementById('powM').onclick = () => { power = clamp(power - 5, 30, 100); };
+  document.getElementById('powP').onclick = () => { power = clamp(power + 5, 30, 100); };
   document.getElementById('roll').onclick = () => { makeRoll(); };
   document.getElementById('reset').onclick = () => { newFrame(); };
   document.getElementById('new').onclick = () => { newFrame(true); };
 
+  // Main loop
   function loop(){
-    // physics: ball
+    // Smooth slide of starting position when idle
+    if (!ball.active) {
+      const ease = 0.18; // 0.1–0.25 = slow–snappy
+      const dx = (typeof targetStartX === 'number' ? targetStartX : startX) - ball.x;
+      if (Math.abs(dx) > 0.1) {
+        ball.x += dx * ease;
+        startX = ball.x;
+      } else {
+        ball.x = (typeof targetStartX === 'number' ? targetStartX : startX);
+        startX = ball.x;
+      }
+      startX = clamp(startX, 200, 600);
+      ball.x = clamp(ball.x, 200, 600);
+    }
+
+    // Physics when rolling
     if (ball.active){
       ball.x += ball.vx; ball.y += ball.vy;
+
+      // Lane borders
       if (ball.x < 160 + ball.r){ ball.x = 160 + ball.r; ball.vx *= -0.7; }
       if (ball.x > 640 - ball.r){ ball.x = 640 - ball.r; ball.vx *= -0.7; }
+
+      // friction + tiny hook based on aim
       ball.vx *= 0.996; ball.vy *= 0.998;
       ball.vx += Math.sin(aim*Math.PI/180) * 0.015;
 
-      // collisions
+      // collisions with pins
       for (const p of pins){
         if (p.knocked) continue;
         const dx = ball.x - p.x, dy = ball.y - p.y;
@@ -127,24 +171,28 @@
         }
       }
 
-      // end of lane
+      // reached the end of lane
       if (ball.y < 90){
         const knockedNow = pins.filter(p=>p.knocked).length;
         const standing = 10 - knockedNow;
         let message = `${knockedNow} pin${knockedNow===1?'':'s'}!`;
         let advanceFrame = false;
 
-       if (rollInFrame === 1){
-  if (standing === 0){
-    score += 10; message = 'STRIKE! 10 points'; advanceFrame = true;
-  } else {
-    rollInFrame = 2;
-    message += ' Roll 2: aim & SPACE to roll again';
-    ball = makeBall();
-    rolling = false;             // ← allow Space to work for roll 2
-  }
+        if (rollInFrame === 1){
+          if (standing === 0){
+            score += 10; message = 'STRIKE! 10 points'; advanceFrame = true;
+          } else {
+            // Prepare second roll
+            rollInFrame = 2;
+            message += ' Roll 2: aim/slide & SPACE to roll again';
+            ball = makeBall();
+            rolling = false;       // allow Space to trigger
+            ball.active = false;   // ensure idle state
+          }
         } else {
-          score += knockedNow; advanceFrame = true;
+          // second roll scoring (simple: add pins knocked this frame total)
+          score += knockedNow;
+          advanceFrame = true;
         }
 
         if (advanceFrame){
@@ -157,7 +205,6 @@
         } else {
           setMessage(message);
         }
-        ball.active = false; ball.vx=ball.vy=0;
       }
     }
 
@@ -167,7 +214,7 @@
       p.x += p.vx; p.y += p.vy; p.vx *= 0.98; p.vy *= 0.98;
     }
 
-    // draw
+    // Draw
     ctx.clearRect(0,0,W,H);
     drawBackground(ctx);
     drawLane(ctx);
@@ -179,6 +226,7 @@
     requestAnimationFrame(loop);
   }
 
+  // Drawing
   function drawBackground(ctx){
     const g = ctx.createLinearGradient(0,0,0,H);
     g.addColorStop(0, '#0b1b34'); g.addColorStop(1, '#193a60');
@@ -186,23 +234,28 @@
   }
 
   function drawLane(ctx){
+    // gutters
     ctx.fillStyle = '#0a1020';
     ctx.fillRect(120,80,40,440);
     ctx.fillRect(640,80,40,440);
 
+    // wood lane
     const laneGrad = ctx.createLinearGradient(160,520,640,80);
     laneGrad.addColorStop(0,'#d9a86c'); laneGrad.addColorStop(1,'#c58b49');
     ctx.fillStyle = laneGrad;
     ctx.fillRect(160,80,480,440);
 
+    // approach
     ctx.fillStyle = '#8b5e34';
     ctx.fillRect(160,520,480,24);
 
+    // center line
     ctx.strokeStyle = 'rgba(0,0,0,0.15)';
     ctx.setLineDash([8,12]);
     ctx.beginPath(); ctx.moveTo(400,520); ctx.lineTo(400,92); ctx.stroke();
     ctx.setLineDash([]);
 
+    // festive lights
     ctx.save(); ctx.translate(160,72);
     for (let i=0;i<16;i++){ const x=(i/15)*480;
       ctx.fillStyle = ['#ffd166','#ef476f','#06d6a0','#118ab2'][i%4];
@@ -216,7 +269,8 @@
       ctx.save(); ctx.translate(p.x, p.y);
       if (p.knocked) ctx.rotate((p.vx+p.vy)*0.08);
       // body
-      ctx.fillStyle = '#fff2e0'; roundRect(ctx,-10,-24,20,44,10); ctx.fill();
+      roundRect(ctx,-10,-24,20,44,10);
+      ctx.fillStyle = '#fff2e0'; ctx.fill();
       // hat
       ctx.fillStyle = '#d1495b'; ctx.beginPath(); ctx.moveTo(0,-32); ctx.lineTo(12,-16); ctx.lineTo(-12,-16); ctx.closePath(); ctx.fill();
       ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0,-32,3,0,Math.PI*2); ctx.fill();
@@ -232,17 +286,20 @@
 
   function drawBall(ctx, b){
     ctx.save(); ctx.translate(b.x, b.y);
+    // shadow
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.beginPath(); ctx.ellipse(0, b.r*0.6, b.r*1.1, b.r*0.4, 0, 0, Math.PI*2); ctx.fill();
-    const g = ctx.createRadialGradient(-6,-6,2, 0, 0, b.r);
+    // body
+    const g = ctx.createRadialGradient(-6,-6,2, 0,0,b.r);
     g.addColorStop(0,'#ffffff'); g.addColorStop(1,'#e6ecf6');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
+    // iris/pupil/highlight
     ctx.fillStyle = '#2b4a73'; ctx.beginPath(); ctx.arc(0,0,b.r*0.55,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = '#7fb3e4'; ctx.beginPath(); ctx.arc(0,0,b.r*0.35,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = '#0b1730'; ctx.beginPath(); ctx.arc(4,-2,b.r*0.22,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(8,-6,b.r*0.09,0,Math.PI*2); ctx.fill();
     // beanie
-    ctx.fillStyle = '#365b2c'; roundRect(ctx,-18,-24,36,12,6); ctx.fill();
+    roundRect(ctx,-18,-24,36,12,6); ctx.fillStyle = '#365b2c'; ctx.fill();
     ctx.fillStyle = '#4a7a3a'; ctx.beginPath(); ctx.arc(18,-18,5,0,Math.PI*2); ctx.fill();
     // smile
     ctx.strokeStyle = '#c33'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(-2,6,10,0,Math.PI*0.7,false); ctx.stroke();
