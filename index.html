@@ -55,56 +55,81 @@
   const MAX_X = 640 - BALL_R; // 624
 
   // Game state
-  let aim = 0;               // -25..25 deg
-  let power = 60;            // 30..100
-  let rolling = false;       // currently rolling down the lane?
-  let resolvedThisRoll = false; // <- one-shot guard to avoid double-scoring a roll
-  let frame = 1, rollInFrame = 1, score = 0;
+  let aim = 0;                 // -25..25 deg
+  let power = 60;              // 30..100
+  let rolling = false;         // currently rolling down the lane?
+  let resolvedThisRoll = false;// one-shot guard to avoid double-scoring a roll
+  let frame = 1;               // 1..10 (current frame index)
+  let rollInFrame = 1;         // 1..3 depending on 10th frame
+  let startX = 400;            // current starting X of Viz
 
-  // Track pins knocked on first roll to score only NEW pins on roll 2
-  let firstRollKnocked = 0;
-
-  // Starting position (immediate movement with arrows/buttons)
-  let startX = 400;          // current starting X of Viz
-
+  // Pins array + ball state
   let pins = makePins();
   let ball = makeBall();
 
+  // Traditional scoring data
+  // frames[i] = { r1, r2, r3 } pins per roll (10th may have r3)
+  let frames = Array.from({length: 10}, () => ({ r1: null, r2: null, r3: null }));
+  let totalScore = 0;
+
+  // Helpers
   const clamp = (n,a,b) => Math.max(a, Math.min(b, n));
   const map = (n,a1,a2,b1,b2) => b1 + ((n-a1)*(b2-b1))/(a2-a1);
+  const setMessage = t => { msg.textContent = t; };
+  const updateHUD = () => {
+    const f = frames.map((fr,i) => frameString(fr, i)).join(' | ');
+    hud.textContent = `Frame ${frame} • Roll ${rollInFrame} • Score ${totalScore} • Aim ${aim|0}° • Power ${power}% | ${f}`;
+  };
 
-  function setMessage(t){ msg.textContent = t; }
-  function updateHUD(){
-    document.getElementById('hud').textContent =
-      `Frame ${frame} • Roll ${rollInFrame} • Score ${score} • Aim ${aim|0}° • Power ${power}%`;
+  function frameString(fr, i){
+    const r1 = fr.r1 ?? '-', r2 = fr.r2 ?? '-', r3 = fr.r3 ?? '-';
+    if (i < 9) {
+      // frames 1-9: show X for strike, / for spare
+      if (fr.r1 === 10) return `F${i+1}: X`;
+      if (fr.r1 != null && fr.r2 != null) return `F${i+1}: ${fr.r1 + fr.r2 === 10 ? (fr.r1 + " /") : (fr.r1 + " " + fr.r2)}`;
+      if (fr.r1 != null) return `F${i+1}: ${fr.r1}`;
+      return `F${i+1}: -`;
+    } else {
+      // frame 10 show raw rolls
+      return `F10: ${r1} ${r2} ${fr.r3 != null ? r3 : ''}`.trim();
+    }
   }
 
   function makeBall(){ return { x: startX, y: 520, vx:0, vy:0, r:BALL_R, active:false }; }
 
-  function newFrame(resetAll=false){
-    if (resetAll){ frame = 1; score = 0; }
+  function newGame(){
+    aim=0; power=60; rolling=false; resolvedThisRoll=false; frame=1; rollInFrame=1;
+    startX=400; pins=makePins(); ball=makeBall();
+    frames = Array.from({length: 10}, () => ({ r1: null, r2: null, r3: null }));
+    totalScore = 0;
+    setMessage('Aim with ← → (moves Viz), set power with ↑ ↓, SPACE to roll');
+  }
+
+  function newFrame(){
     rollInFrame = 1;
-    firstRollKnocked = 0;
-    resolvedThisRoll = false;
     pins = makePins();
     ball = makeBall();
     rolling = false;
+    resolvedThisRoll = false;
     setMessage('Aim with ← → (moves Viz), set power with ↑ ↓, SPACE to roll');
   }
 
   function makeRoll(){
-    if (rolling || pins.every(p=>p.knocked)) return;
+    if (rolling) return;
+    // In normal frames (1-9), if all pins are already knocked (strike last roll), block
+    if (frame < 10 && pins.every(p=>p.knocked)) return;
+
     const speed = map(power, 30, 100, 4.2, 8.2);
     const angle = aim * Math.PI / 180;
     ball.vx = Math.sin(angle) * speed;
     ball.vy = -Math.cos(angle) * speed;
     ball.active = true;
     rolling = true;
-    resolvedThisRoll = false;    // <- new roll starts unresolved
+    resolvedThisRoll = false; // guard for this roll
     setMessage('Rolling… press R to reset if stuck');
   }
 
-  // Input (keyboard)
+  // --- INPUT ---
   window.addEventListener('keydown', e => {
     if (e.repeat) return;
 
@@ -121,13 +146,21 @@
     if (e.key === 'ArrowUp')   power = clamp(power + 5, 30, 100);
     if (e.key === 'ArrowDown') power = clamp(power - 5, 30, 100);
 
-    if (e.key === ' '){ makeRoll(); e.preventDefault(); }
-    if (e.key.toLowerCase() === 'r'){ newFrame(); }
-    if (e.key === 'Enter'){ if (!rolling && !ball.active){ frame++; newFrame(); } }
-    if (e.key.toLowerCase() === 'n'){ newFrame(true); }
+    if (e.key === ' ') { makeRoll(); e.preventDefault(); }
+    if (e.key.toLowerCase() === 'r') { // reset current frame (practice)
+      pins = makePins(); ball = makeBall(); rolling=false; resolvedThisRoll=false; rollInFrame = 1;
+      setMessage('Frame reset. Aim and roll.');
+    }
+    if (e.key.toLowerCase() === 'n') { newGame(); }
+    if (e.key === 'Enter') {
+      // Only advance if the current frame is finished (Frames 1-9: after r1 strike or r2; Frame 10: after r3 if granted or after 2 if not)
+      if (!rolling && isFrameComplete(frame-1)) {
+        if (frame < 10) { frame++; newFrame(); }
+        else setMessage('Game Over — press N for a new game');
+      }
+    }
   });
 
-  // Input (buttons)
   document.getElementById('aimL').onclick = () => {
     aim = clamp(aim - 3, -25, 25);
     startX = clamp(startX - 20, MIN_X, MAX_X);
@@ -141,23 +174,26 @@
   document.getElementById('powM').onclick = () => { power = clamp(power - 5, 30, 100); };
   document.getElementById('powP').onclick = () => { power = clamp(power + 5, 30, 100); };
   document.getElementById('roll').onclick = () => { makeRoll(); };
-  document.getElementById('reset').onclick = () => { newFrame(); };
-  document.getElementById('new').onclick = () => { newFrame(true); };
+  document.getElementById('reset').onclick = () => {
+    pins = makePins(); ball = makeBall(); rolling=false; resolvedThisRoll=false; rollInFrame = 1;
+    setMessage('Frame reset. Aim and roll.');
+  };
+  document.getElementById('new').onclick = () => { newGame(); };
 
+  // --- LOOP ---
   function loop(){
-    // Physics when rolling
     if (ball.active){
+      // integrate
       ball.x += ball.vx; ball.y += ball.vy;
 
-      // Lane borders
+      // borders
       if (ball.x < 160 + ball.r){ ball.x = 160 + ball.r; ball.vx *= -0.7; }
       if (ball.x > 640 - ball.r){ ball.x = 640 - ball.r; ball.vx *= -0.7; }
-
-      // friction + tiny hook based on aim
+      // friction + tiny hook
       ball.vx *= 0.996; ball.vy *= 0.998;
       ball.vx += Math.sin(aim*Math.PI/180) * 0.015;
 
-      // collisions with pins
+      // collisions
       for (const p of pins){
         if (p.knocked) continue;
         const dx = ball.x - p.x, dy = ball.y - p.y;
@@ -167,51 +203,20 @@
         }
       }
 
-      // reached the end of lane — resolve ONCE using guard
+      // resolve once per roll
       if (ball.y < 90 && !resolvedThisRoll){
-        resolvedThisRoll = true;     // <- guard flips immediately
+        resolvedThisRoll = true;
 
+        // count pins
         const knockedNow = pins.filter(p=>p.knocked).length;
         const standing = 10 - knockedNow;
-        let message = `${knockedNow} pin${knockedNow===1?'':'s'}!`;
-        let advanceFrame = false;
 
-        // Stop motion so we don't re-enter resolution
+        // stop ball so we don't re-enter
         ball.active = false;
-        rolling = false;
-        ball.vx = 0; ball.vy = 0;
+        rolling = false; ball.vx = 0; ball.vy = 0;
 
-        if (rollInFrame === 1){
-          if (standing === 0){
-            score += 10; // simple strike scoring
-            message = 'STRIKE! 10 points';
-            firstRollKnocked = 10;
-            advanceFrame = true;
-          } else {
-            // Prepare second roll
-            rollInFrame = 2;
-            firstRollKnocked = knockedNow;     // remember roll-1 knocked count
-            message += ' Roll 2: move/aim & SPACE to roll again';
-            ball = makeBall();                 // respawn idle at current startX
-            // Note: resolvedThisRoll stays true until next makeRoll()
-          }
-        } else {
-          // Second roll — add ONLY new pins from roll 2
-          const pinsSecond = Math.max(0, knockedNow - firstRollKnocked);
-          score += pinsSecond;
-          firstRollKnocked = 0;
-          advanceFrame = true;
-        }
-
-        if (advanceFrame){
-          if (frame >= 10){
-            setMessage(message + ' | Game Over — press N to start new game');
-          } else {
-            setMessage(message + ` | Frame ${frame+1} next (press ENTER)`);
-          }
-        } else {
-          setMessage(message);
-        }
+        handleRoll(knockedNow, standing); // updates frames/rollInFrame/frame, may reset pins per 10th
+        recomputeScore();
       }
     }
 
@@ -221,7 +226,7 @@
       p.x += p.vx; p.y += p.vy; p.vx *= 0.98; p.vy *= 0.98;
     }
 
-    // Draw
+    // draw
     ctx.clearRect(0,0,canvas.width,canvas.height);
     drawBackground(ctx);
     drawLane(ctx);
@@ -233,7 +238,159 @@
     requestAnimationFrame(loop);
   }
 
-  // Drawing
+  // --- ROLL/FRAME/SCORING LOGIC ---
+
+  function handleRoll(knockedNow, standing){
+    const fi = frame - 1;                     // index 0..9
+    const fr = frames[fi];
+
+    if (frame <= 9){ // Frames 1–9
+      if (rollInFrame === 1){
+        if (knockedNow === 10){
+          // Strike
+          fr.r1 = 10;
+          setMessage('STRIKE! (Press Enter for next frame)');
+          // advance frame
+          if (frame < 10){ frame++; newFrame(); }
+          else rollInFrame = 1; // will be handled by 10th logic (not reached here)
+        } else {
+          fr.r1 = knockedNow;
+          rollInFrame = 2;
+          setMessage(`${knockedNow} pin${knockedNow===1?'':'s'} — Roll 2: adjust & SPACE`);
+          // keep remaining pins on deck (no reset)
+          ball = makeBall();
+        }
+      } else { // roll 2
+        // pins knocked on roll2 = total knocked - r1
+        const r2 = Math.max(0, Math.min(10 - (fr.r1||0), knockedNow - (fr.r1||0)));
+        fr.r2 = r2;
+
+        if ((fr.r1||0) + r2 === 10){
+          setMessage('SPARE! (Press Enter for next frame)');
+        } else {
+          setMessage(`${(fr.r1||0)+r2} pins this frame (Press Enter for next frame)`);
+        }
+        // advance frame
+        if (frame < 10){ frame++; newFrame(); }
+      }
+    } else {
+      // Frame 10 special rules
+      if (rollInFrame === 1){
+        fr.r1 = knockedNow;
+        if (knockedNow === 10){
+          // strike: reset pins, allow two more rolls
+          setMessage('10th: STRIKE! Two more balls.');
+          pins = makePins(); // reset
+        } else {
+          setMessage(`10th: ${knockedNow} — Roll 2`);
+        }
+        rollInFrame = 2;
+        ball = makeBall();
+      } else if (rollInFrame === 2){
+        // knock on roll2 depends on whether first was strike
+        if (fr.r1 === 10){
+          // fresh set on roll2
+          fr.r2 = knockedNow; // can be 0..10
+          if (knockedNow === 10){
+            setMessage('10th: Another strike! Final bonus ball.');
+          } else {
+            setMessage(`10th: ${knockedNow} on ball 2 — Final bonus ball.`);
+          }
+          // reset pins for roll3 as well (10th bonus ball is on a fresh set)
+          pins = makePins();
+          rollInFrame = 3;
+        } else {
+          // first was not strike: roll2 is on remaining pins
+          const r2 = Math.max(0, Math.min(10 - (fr.r1||0), knockedNow - (fr.r1||0)));
+          fr.r2 = r2;
+
+          if ((fr.r1||0) + r2 === 10){
+            // spare -> allow one bonus ball on fresh set
+            setMessage('10th: SPARE! One bonus ball.');
+            pins = makePins();
+            rollInFrame = 3;
+          } else {
+            // open frame -> game over
+            setMessage('10th: Frame complete. Game Over — press N for a new game');
+            rollInFrame = 3; // mark complete (no third ball)
+          }
+        }
+        ball = makeBall();
+      } else {
+        // roll 3 (only if strike/spare earned it)
+        // Always a fresh set in our simplified 10th-frame handling
+        fr.r3 = knockedNow; // 0..10 possible
+        setMessage('10th: Game Over — press N for a new game');
+        // No more frames; wait for Enter/N as desired (Enter does nothing here)
+      }
+    }
+  }
+
+  function recomputeScore(){
+    // compute total using standard rules: strike = 10 + next two rolls; spare = 10 + next roll
+    totalScore = 0;
+    for (let i = 0; i < 10; i++){
+      const fr = frames[i];
+      if (i < 9) {
+        const r1 = fr.r1 ?? null, r2 = fr.r2 ?? null;
+        if (r1 == null) break; // frame not started
+        if (r1 === 10) {
+          const bonus = sumNextRolls(i, 2);
+          if (bonus == null) break; // not enough info yet
+          totalScore += 10 + bonus;
+        } else if (r2 != null) {
+          if (r1 + r2 === 10) {
+            const bonus = sumNextRolls(i, 1);
+            if (bonus == null) break;
+            totalScore += 10 + bonus;
+          } else {
+            totalScore += r1 + r2;
+          }
+        } else {
+          // waiting for second roll
+          break;
+        }
+      } else {
+        // 10th frame: sum of available rolls
+        const r1 = fr.r1 ?? 0, r2 = fr.r2 ?? 0, r3 = fr.r3 ?? 0;
+        totalScore += r1 + r2 + r3;
+      }
+    }
+  }
+
+  // Return sum of the next N rolls after frame i (look ahead into future frames).
+  // If not enough rolls yet, return null.
+  function sumNextRolls(i, n){
+    const rolls = [];
+    for (let f = i+1; f < 10; f++){
+      const fr = frames[f];
+      if (fr.r1 != null) rolls.push(fr.r1);
+      if (rolls.length >= n) break;
+      if (fr.r2 != null) rolls.push(fr.r2);
+      if (rolls.length >= n) break;
+      if (f === 9 && fr.r3 != null) rolls.push(fr.r3); // 10th bonus ball
+      if (rolls.length >= n) break;
+    }
+    if (rolls.length < n) return null;
+    return rolls.slice(0, n).reduce((a,b)=>a+b,0);
+  }
+
+  function isFrameComplete(idx){
+    const fr = frames[idx];
+    if (idx < 9) {
+      // strike or two rolls filled
+      return (fr.r1 === 10) || (fr.r1 != null && fr.r2 != null);
+    } else {
+      // 10th: if r1 is strike or r1+r2 is spare => need r3 to finish; else done after r2
+      if (fr.r1 == null) return false;
+      if (fr.r1 === 10) return fr.r2 != null && fr.r3 != null;
+      if (fr.r2 == null) return false;
+      if (fr.r1 + fr.r2 === 10) return fr.r3 != null;
+      return true; // open frame done after two rolls
+    }
+  }
+
+  // --- DRAWING ---
   function drawBackground(ctx){
     const g = ctx.createLinearGradient(0,0,0,canvas.height);
     g.addColorStop(0, '#0b1b34'); g.addColorStop(1, '#193a60');
@@ -296,7 +453,7 @@
     // shadow
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.beginPath(); ctx.ellipse(0, b.r*0.6, b.r*1.1, b.r*0.4, 0, 0, Math.PI*2); ctx.fill();
-    // body
+    // body (Viz)
     const g = ctx.createRadialGradient(-6,-6,2, 0,0,b.r);
     g.addColorStop(0,'#ffffff'); g.addColorStop(1,'#e6ecf6');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
@@ -317,7 +474,7 @@
     ctx.save(); ctx.fillStyle = '#ffffff'; ctx.font = '14px Inter, system-ui, sans-serif';
     ctx.fillText('Aim: ' + (aim|0) + '°', 10, 20);
     ctx.fillText('Power: ' + power + '%', 10, 40);
-    ctx.fillText('Score: ' + score, 10, 60);
+    ctx.fillText('Score: ' + totalScore, 10, 60);
     ctx.fillText('Frame ' + frame + ' / 10  •  Roll ' + rollInFrame, 10, 80);
     ctx.restore();
   }
@@ -340,13 +497,10 @@
     return ps;
   }
 
-  function start(){
-    newFrame(false);
-    updateHUD();
-    requestAnimationFrame(loop);
-  }
-
-  start();
+  // start
+  newGame();
+  updateHUD();
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>
