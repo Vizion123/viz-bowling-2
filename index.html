@@ -55,11 +55,14 @@
   const MIN_X = 160 + BALL_R; // 176
   const MAX_X = 640 - BALL_R; // 624
 
-  // State
+  // Game state
   let aim = 0;               // -25..25 deg
   let power = 60;            // 30..100
   let rolling = false;
   let frame = 1, rollInFrame = 1, score = 0;
+
+  // Track pins knocked on first roll to score only the NEW pins on roll 2
+  let firstRollKnocked = 0;
 
   // Starting position (immediate movement with arrows/buttons)
   let startX = 400;          // current starting X of Viz
@@ -79,6 +82,7 @@
   function newFrame(resetAll=false){
     if (resetAll){ frame = 1; score = 0; }
     rollInFrame = 1;
+    firstRollKnocked = 0;
     pins = makePins();
     // keep chosen startX when starting new frame
     ball = makeBall();
@@ -164,27 +168,38 @@
         }
       }
 
-      // reached the end of lane
+      // reached the end of lane — resolve ONCE, then deactivate ball so it can't rescore
       if (ball.y < 90){
         const knockedNow = pins.filter(p=>p.knocked).length;
         const standing = 10 - knockedNow;
+
+        // Deactivate immediately to prevent repeated scoring on subsequent frames
+        ball.active = false;
+        rolling = false;
+        ball.vx = 0; ball.vy = 0;
+
         let message = `${knockedNow} pin${knockedNow===1?'':'s'}!`;
         let advanceFrame = false;
 
         if (rollInFrame === 1){
           if (standing === 0){
-            score += 10; message = 'STRIKE! 10 points'; advanceFrame = true;
+            score += 10; // simple strike scoring
+            message = 'STRIKE! 10 points';
+            firstRollKnocked = 10;
+            advanceFrame = true;
           } else {
             // Prepare second roll
             rollInFrame = 2;
+            firstRollKnocked = knockedNow;  // remember how many fell on roll 1
             message += ' Roll 2: move/aim & SPACE to roll again';
-            ball = makeBall();     // respawn at current startX
-            rolling = false;       // allow Space to trigger
-            ball.active = false;   // ensure idle state
+            ball = makeBall();              // respawn at current startX (idle)
+            // ball.active already false
           }
         } else {
-          // second roll (simple scoring: add total pins knocked this frame)
-          score += knockedNow;
+          // Second roll — add ONLY the new pins knocked on roll 2
+          const pinsSecond = Math.max(0, knockedNow - firstRollKnocked);
+          score += pinsSecond;
+          firstRollKnocked = 0;
           advanceFrame = true;
         }
 
@@ -194,7 +209,6 @@
           } else {
             setMessage(message + ` | Frame ${frame+1} next (press ENTER)`);
           }
-          rolling = false;
         } else {
           setMessage(message);
         }
