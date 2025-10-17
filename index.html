@@ -134,14 +134,15 @@
         let message = `${knockedNow} pin${knockedNow===1?'':'s'}!`;
         let advanceFrame = false;
 
-        if (rollInFrame === 1){
-          if (standing === 0){
-            score += 10; message = 'STRIKE! 10 points'; advanceFrame = true;
-          } else {
-            rollInFrame = 2;
-            message += ' Roll 2: aim & SPACE to roll again';
-            ball = makeBall();
-          }
+       if (rollInFrame === 1){
+  if (standing === 0){
+    score += 10; message = 'STRIKE! 10 points'; advanceFrame = true;
+  } else {
+    rollInFrame = 2;
+    message += ' Roll 2: aim & SPACE to roll again';
+    ball = makeBall();
+    rolling = false;             // ← allow Space to work for roll 2
+  }
         } else {
           score += knockedNow; advanceFrame = true;
         }
